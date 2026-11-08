@@ -1,0 +1,8 @@
+bin/
+obj/
+results/
+.foundry/
+.azure/
+reference/
+*.user
+.dotnet-install/
