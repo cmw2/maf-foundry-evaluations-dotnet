@@ -6,7 +6,6 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <NoWarn>AAIP001;OPENAI001;SCME0001</NoWarn>
-    <ReferenceRoot Condition="'$(ReferenceRoot)' == ''">..\agent-framework-validation</ReferenceRoot>
     <EnableDefaultItems>false</EnableDefaultItems>
   </PropertyGroup>
   <ItemGroup>
@@ -15,6 +14,6 @@
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Azure.AI.Projects" Version="3.0.0-beta.5" />
     <PackageReference Include="Azure.AI.Extensions.OpenAI" Version="3.0.0-beta.5" />
-    <ProjectReference Include="$(MSBuildThisFileDirectory)$(ReferenceRoot)\dotnet\src\Microsoft.Agents.AI.OpenAI\Microsoft.Agents.AI.OpenAI.csproj" />
+    <PackageReference Include="Microsoft.Agents.AI.OpenAI" Version="1.27.0" />
   </ItemGroup>
 </Project>

@@ -40,16 +40,7 @@ jobs:
         env:
           DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
         with:
-          dotnet-version: 10.0.403
-      - name: Fetch pinned Microsoft reference implementation
-        shell: pwsh
-        run: |
-          git clone --quiet -c core.longpaths=true --filter=blob:none --sparse https://github.com/microsoft/agent-framework.git reference
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C reference sparse-checkout set dotnet
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git -C reference checkout --quiet 924a6e50ec0336f3c965ee8b1151c54085888b6e
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet-version: 10.0.x
       - uses: azure/login@7184910d9eb2b1c5e48f7073824a90609bb9b6d6
         with:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
@@ -60,7 +51,7 @@ jobs:
         env:
           EVAL_MODE: ${{ inputs.mode }}
         run: |
-          dotnet run --project tests/EvalValidation.csproj -p:ReferenceRoot=reference -- $env:EVAL_MODE
+          dotnet run --project tests/EvalValidation.csproj -- $env:EVAL_MODE
           exit $LASTEXITCODE
       - name: Publish individual evaluation test cases
         if: always()
