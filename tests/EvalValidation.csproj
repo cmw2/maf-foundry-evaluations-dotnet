@@ -13,6 +13,7 @@
     <Compile Include="MafEvaluation.cs" />
     <Compile Include="PromptEvaluation.cs" />
     <Compile Include="EvaluationRunner.cs" />
+    <Compile Include="ExplicitEvaluation.cs" />
     <ProjectReference Include="..\MafAgent.csproj" />
     <PackageReference Include="Azure.Identity" Version="1.21.0" />
     <PackageReference Include="Microsoft.Agents.AI.Foundry" Version="1.27.0-preview.261030.1" />

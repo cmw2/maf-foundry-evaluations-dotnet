@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Agent to evaluate (negative intentionally fails the quality gate)
+        description: Evaluation mode (negative modes intentionally fail the quality gate)
         type: choice
-        options: [maf, prompt, negative]
+        options: [maf, maf-simple, maf-simple-negative, prompt, negative]
         default: maf
       runner:
         description: Hosted runner, or an explicitly provisioned temporary synthetic-validation runner

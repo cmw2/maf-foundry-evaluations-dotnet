@@ -27,9 +27,10 @@ The judge can use a different model deployment from the agent.
 | `Program.cs` | Runs the application with a question supplied on the command line. |
 | `MafAgent.csproj` | The application project at the repository root. |
 | `tests/Program.cs` | Selects the evaluation mode. |
-| `tests/MafEvaluation.cs` | Connects the evaluation project to the application's agent factory. |
+| `tests/MafEvaluation.cs` | Connects the application agent to the tests and shows the `EvaluateAsync` approach. |
 | `tests/PromptEvaluation.cs` | Loads an existing Foundry prompt agent, or creates the example prompt agent. |
-| `tests/EvaluationRunner.cs` | Runs the questions, submits answers to Foundry, retrieves scores, enforces the quality gate, and writes reports. |
+| `tests/ExplicitEvaluation.cs` | Invokes the agent and submits answers to Foundry with explicit orchestration. |
+| `tests/EvaluationRunner.cs` | Selects the approach, retrieves scores, enforces the quality gate, and writes reports. |
 | `tests/EvalValidation.csproj` | The evaluation project, which references the application project. |
 | `.github/workflows/evaluate.yml` | Runs evaluations and publishes GitHub summaries, test checks, and artifacts. |
 
@@ -82,6 +83,25 @@ and submits the answers to Foundry for scoring. Results are written to `results/
 as JSON, Markdown, and JUnit XML. Exit code 0 means the quality gate passed;
 exit code 1 indicates a quality failure or evaluation error.
 
+### Evaluate the MAF agent with less orchestration
+
+```powershell
+dotnet run --project tests\EvalValidation.csproj -- maf-simple
+```
+
+This test passes the agent, questions, and Foundry evaluators to
+`agent.EvaluateAsync`. Agent Framework calls the agent for each question,
+then submits the collected responses to Foundry. The test runner retrieves
+the results for the same quality gate and JSON, Markdown, and JUnit reports
+as the explicit approach.
+You can also supply expected answers via `expectedOutput` when using an
+evaluator that compares responses with a reference; relevance and coherence
+do not use expected answers.
+
+Start with this approach for straightforward tests. Use explicit orchestration
+when you need more control over agent invocation or evaluation requests.
+Both use the same agent, judge criteria, and CI reporting.
+
 ### Evaluate a Foundry prompt agent
 
 Select an existing agent and version:
@@ -101,11 +121,13 @@ $env:FOUNDRY_AGENT_VERSION = '<version printed by setup>'
 dotnet run --project tests\EvalValidation.csproj -- prompt
 ```
 
-To demonstrate a failing quality gate, run `negative`. It substitutes an agent
+To demonstrate a failing quality gate, run `negative` for the explicit approach
+or `maf-simple-negative` for the helper approach. Each substitutes an agent
 that answers both questions with "Banana spaceship purple socks."
 
 ```powershell
 dotnet run --project tests\EvalValidation.csproj -- negative
+dotnet run --project tests\EvalValidation.csproj -- maf-simple-negative
 ```
 
 ### Local evaluation status
@@ -118,18 +140,23 @@ access, the documented request format, and a separate judge model did not
 reliably resolve it. A temporary project-managed-identity permission test
 produced a fully scored positive run and a fully scored negative run, but
 another evaluation still had the same authentication error after propagation.
-The experimental grant was removed. The exact denied caller identity and
-root cause remain unresolved.
+After the project identity's account-scoped Foundry User grant was restored,
+the concise MAF example returned one incomplete score on one run and all four
+scores on another. The exact denied caller identity and root cause remain
+unresolved.
 
-The same evaluation paths produced complete scores using GitHub Actions
-workload identity. This points to an authentication-path difference to
-investigate, rather than an established .NET limitation.
+Earlier versions of the explicit evaluation paths produced complete scores
+using GitHub Actions workload identity. The current helper mode also passed
+both cases and all four evaluator scores in a private GitHub Actions run.
+This successful run does not establish that the intermittent error is resolved.
 
 ## Run in GitHub Actions
 
-Create a dedicated Azure identity with a federated credential for this
-repository's `main` branch, and grant it Foundry User on the parent Foundry
-account. Match the federation to the repository's actual OIDC subject.
+This public repository is not connected to an Azure environment. To run the
+workflow in your own repository, create a dedicated Azure identity with a
+federated credential for that repository's `main` branch, and grant it Foundry
+User on the parent Foundry account. Match the federation to the repository's
+actual OIDC subject.
 The workflow uses `azure/login` to sign in without a client secret.
 
 Configure these repository variables under **Settings > Secrets and variables >
@@ -147,7 +174,7 @@ Actions > Variables**:
 | `FOUNDRY_AGENT_VERSION` | Existing prompt agent version; needed for `prompt` mode |
 
 Open **Actions > .NET Foundry evaluations > Run workflow** and choose `maf`,
-`prompt`, or `negative`. The default runner is GitHub-hosted. The
+`maf-simple`, `maf-simple-negative`, `prompt`, or `negative`. The default runner is GitHub-hosted. The
 `temporary-validation` option supports a provisioned Windows x64 self-hosted
 runner labeled `dotnet-eval-validation`.
 
@@ -174,7 +201,9 @@ quality gate, and GitHub summaries and individual-test checks. Those live runs
 preceded the current root-agent/`tests` layout. The current package-based
 negative test also produced all four scores of 1 and failed the quality gate
 as expected. Its local positive MAF run had three scores and one evaluator
-authentication error; reliable positive execution remains to be established.
+authentication error. The concise example subsequently produced a passing
+local run as well as an incomplete run, and passed both cases in a private
+GitHub Actions run; reliable execution remains to be established.
 
 ## References
 
