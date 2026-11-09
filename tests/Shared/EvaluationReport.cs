@@ -6,52 +6,29 @@ using System.Text.Json;
 using System.Xml.Linq;
 using Azure.AI.Projects;
 using Azure.Identity;
-using Microsoft.Agents.AI;
-using Microsoft.Agents.AI.Foundry;
 
-internal static class EvaluationRunner
+public sealed record EvaluationRun(string EvalId, string RunId, string AgentType, string? AgentName, string? AgentVersion = null);
+public sealed record EvaluationOutcome(bool Complete, bool QualityGatePassed, string? Error = null);
+
+public static class EvaluationReport
 {
-    public static async Task<int> RunAsync(string mode)
+    public static async Task<EvaluationOutcome> RunAsync(
+        string testName, string[] queries, string[] expectedEvaluators,
+        Func<AIProjectClient, EvaluationSettings, Task<EvaluationRun>> evaluate)
     {
-        string endpoint = Required("FOUNDRY_PROJECT_ENDPOINT");
-        string model = Required("FOUNDRY_MODEL");
-        string judgeModel = Environment.GetEnvironmentVariable("FOUNDRY_JUDGE_MODEL") is { Length: > 0 } configuredJudge
-            ? configuredJudge : model;
         string output = Environment.GetEnvironmentVariable("EVAL_OUTPUT") ?? "results";
-        string agentName = Environment.GetEnvironmentVariable("FOUNDRY_AGENT_NAME") ?? "dotnet-eval-smoke";
-        string[] queries = ["What is photosynthesis?", "How do vaccines work?"];
-        string[] expectedEvaluators = [FoundryEvals.Relevance, FoundryEvals.Coherence];
         DateTimeOffset startedAt = DateTimeOffset.UtcNow;
         try
         {
-            AIProjectClient project = new(new Uri(endpoint), new AzureCliCredential(new AzureCliCredentialOptions
-            {
-                ProcessTimeout = TimeSpan.FromSeconds(120)
-            }));
-
-            if (mode == "setup")
-            {
-                await PromptEvaluation.SetupAsync(project, model, agentName);
-                return 0;
-            }
-
-            AIAgent agent;
-            string? agentVersion = null;
-            if (mode == "prompt")
-            {
-                agentVersion = Required("FOUNDRY_AGENT_VERSION");
-                agent = await PromptEvaluation.CreateAgentAsync(project, agentName, agentVersion);
-            }
-            else
-            {
-                agent = MafEvaluation.CreateAgent(project, model, mode is "negative" or "maf-simple-negative");
-            }
-
-            Console.WriteLine($"Running {mode}; agent type: {agent.GetType().Name}; model: {model}; judge: {judgeModel}");
+            EvaluationSettings settings = EvaluationSettings.Load();
+            string model = settings.Model;
+            string judgeModel = settings.JudgeModel;
+            AIProjectClient project = settings.CreateProject();
+            Console.WriteLine($"Running {testName}; model: {model}; judge: {judgeModel}");
+            EvaluationRun evaluation = await evaluate(project, settings);
             var evalClient = project.GetProjectOpenAIClient().GetEvaluationClient();
-            (string evalId, string runId) = mode is "maf-simple" or "maf-simple-negative"
-                ? await MafEvaluation.RunWithHelperAsync(project, agent, judgeModel, queries, expectedEvaluators, mode)
-                : await ExplicitEvaluation.RunAsync(project, agent, judgeModel, queries, expectedEvaluators, mode);
+            string evalId = evaluation.EvalId;
+            string runId = evaluation.RunId;
             Console.WriteLine($"Eval: {evalId}; run: {runId}");
             DateTimeOffset deadline = DateTimeOffset.UtcNow.AddMinutes(15);
             JsonElement run;
@@ -84,7 +61,7 @@ internal static class EvaluationRunner
             };
 
             Directory.CreateDirectory(output);
-            await File.WriteAllTextAsync(Path.Combine(output, $"{mode}-run.json"),
+            await File.WriteAllTextAsync(Path.Combine(output, $"{testName}-run.json"),
                 JsonSerializer.Serialize(run, new JsonSerializerOptions { WriteIndented = true }));
             var rawItems = new List<JsonElement>();
             string? cursor = null;
@@ -99,7 +76,7 @@ internal static class EvaluationRunner
                 cursor = more ? document.RootElement.GetProperty("last_id").GetString()
                     ?? throw new InvalidOperationException("Foundry pagination returned a null cursor.") : null;
             } while (cursor is not null);
-            await File.WriteAllTextAsync(Path.Combine(output, $"{mode}-raw.json"),
+            await File.WriteAllTextAsync(Path.Combine(output, $"{testName}-raw.json"),
                 JsonSerializer.Serialize(rawItems, new JsonSerializerOptions { WriteIndented = true }));
             var rows = rawItems.OrderBy(item => item.GetProperty("datasource_item_id").GetInt32()).Select(item => new
             {
@@ -144,10 +121,10 @@ internal static class EvaluationRunner
 
             var evidence = new
             {
-                Mode = mode,
-                AgentType = agent.GetType().Name,
-                AgentName = agent.Name,
-                AgentVersion = agentVersion,
+                Test = testName,
+                evaluation.AgentType,
+                evaluation.AgentName,
+                evaluation.AgentVersion,
                 Model = model,
                 JudgeModel = judgeModel,
                 CompletedAt = DateTimeOffset.UtcNow,
@@ -163,12 +140,12 @@ internal static class EvaluationRunner
                 QualityGatePassed = passed,
                 Items = rows
             };
-            await File.WriteAllTextAsync(Path.Combine(output, $"{mode}.json"),
+            await File.WriteAllTextAsync(Path.Combine(output, $"{testName}.json"),
                 JsonSerializer.Serialize(evidence, new JsonSerializerOptions { WriteIndented = true }));
 
             StringBuilder summary = new();
-            summary.AppendLine($"## .NET {mode} evaluation");
-            summary.AppendLine($"Agent: `{agent.GetType().Name}`. Foundry status: `{results.Status}`.");
+            summary.AppendLine($"## .NET {testName} evaluation");
+            summary.AppendLine($"Agent: `{evaluation.AgentType}`. Foundry status: `{results.Status}`.");
             summary.AppendLine($"Agent model: `{model}`. Judge deployment: `{judgeModel}`.");
             summary.AppendLine($"Quality gate: **{(passed ? "PASS" : "FAIL")}**; {passedCases}/{queries.Length} cases passed all required evaluators.");
             summary.AppendLine($"[Open Foundry evaluation report]({results.ReportUrl})");
@@ -186,20 +163,20 @@ internal static class EvaluationRunner
             {
                 summary.AppendLine("ERROR: Incomplete, errored, missing, or unscored results. Failing closed.");
             }
-            await File.WriteAllTextAsync(Path.Combine(output, $"{mode}-summary.md"), summary.ToString());
+            await File.WriteAllTextAsync(Path.Combine(output, $"{testName}-summary.md"), summary.ToString());
             if (Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY") is { Length: > 0 } githubSummary)
             {
                 await File.AppendAllTextAsync(githubSummary, summary.ToString());
             }
 
-            XElement suite = new("testsuite", new XAttribute("name", $"dotnet-{mode}"),
+            XElement suite = new("testsuite", new XAttribute("name", $"dotnet-{testName}"),
                 new XAttribute("tests", queries.Length),
                 new XAttribute("time", (DateTimeOffset.UtcNow - startedAt).TotalSeconds.ToString("F3", CultureInfo.InvariantCulture)),
                 new XAttribute("failures", complete ? queries.Length - passedCases : 0),
                 new XAttribute("errors", complete ? 0 : queries.Length));
             for (int index = 0; index < queries.Length; index++)
             {
-                XElement test = new("testcase", new XAttribute("classname", $"Foundry.{mode}"),
+                XElement test = new("testcase", new XAttribute("classname", $"Foundry.{testName}"),
                     new XAttribute("name", queries[index]), new XAttribute("time", "0"));
                 var row = index < rows.Length ? rows[index] : null;
                 if (!complete || row is null || row.Scores.Any(score => score.Passed != true || score.Score < 3))
@@ -210,10 +187,10 @@ internal static class EvaluationRunner
                 }
                 suite.Add(test);
             }
-            new XDocument(new XElement("testsuites", suite)).Save(Path.Combine(output, $"{mode}-junit.xml"));
+            new XDocument(new XElement("testsuites", suite)).Save(Path.Combine(output, $"{testName}-junit.xml"));
             Console.WriteLine(summary);
             Console.WriteLine($"Eval: {results.EvalId}; run: {results.RunId}");
-            return passed ? 0 : 1;
+            return new EvaluationOutcome(complete, passed, results.Error);
         }
         catch (Exception exception) when (exception is ClientResultException or AuthenticationFailedException
             or TimeoutException or InvalidOperationException)
@@ -221,37 +198,32 @@ internal static class EvaluationRunner
             Directory.CreateDirectory(output);
             string detail = $"{exception.GetType().Name}: {exception.Message}";
             Console.Error.WriteLine(detail);
-            await File.WriteAllTextAsync(Path.Combine(output, $"{mode}.json"),
+            await File.WriteAllTextAsync(Path.Combine(output, $"{testName}.json"),
                 JsonSerializer.Serialize(new
                 {
-                    Mode = mode,
+                    Test = testName,
                     Complete = false,
                     QualityGatePassed = false,
                     Error = detail,
                     CompletedAt = DateTimeOffset.UtcNow
                 }, new JsonSerializerOptions { WriteIndented = true }));
-            string summary = $"## .NET {mode} evaluation\n**ERROR: evaluation did not produce complete scored results.**\n\n{detail}\n";
-            await File.WriteAllTextAsync(Path.Combine(output, $"{mode}-summary.md"), summary);
+            string summary = $"## .NET {testName} evaluation\n**ERROR: evaluation did not produce complete scored results.**\n\n{detail}\n";
+            await File.WriteAllTextAsync(Path.Combine(output, $"{testName}-summary.md"), summary);
             if (Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY") is { Length: > 0 } path)
             {
                 await File.AppendAllTextAsync(path, summary);
             }
-            XElement suite = new("testsuite", new XAttribute("name", $"dotnet-{mode}"),
+            XElement suite = new("testsuite", new XAttribute("name", $"dotnet-{testName}"),
                 new XAttribute("tests", queries.Length), new XAttribute("errors", queries.Length),
                 new XAttribute("time", (DateTimeOffset.UtcNow - startedAt).TotalSeconds.ToString("F3", CultureInfo.InvariantCulture)));
             foreach (string query in queries)
             {
-                suite.Add(new XElement("testcase", new XAttribute("classname", $"Foundry.{mode}"),
+                suite.Add(new XElement("testcase", new XAttribute("classname", $"Foundry.{testName}"),
                     new XAttribute("name", query), new XAttribute("time", "0"),
                     new XElement("error", new XAttribute("message", "Evaluation infrastructure error"), detail)));
             }
-            new XDocument(new XElement("testsuites", suite)).Save(Path.Combine(output, $"{mode}-junit.xml"));
-            return 1;
+            new XDocument(new XElement("testsuites", suite)).Save(Path.Combine(output, $"{testName}-junit.xml"));
+            return new EvaluationOutcome(false, false, detail);
         }
     }
-
-    private static string Required(string name) =>
-    Environment.GetEnvironmentVariable(name) is { Length: > 0 } value
-        ? value
-        : throw new InvalidOperationException($"{name} is required.");
 }

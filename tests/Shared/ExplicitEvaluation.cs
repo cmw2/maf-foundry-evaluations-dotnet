@@ -2,23 +2,16 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Text.Json;
 using Azure.AI.Projects;
-using Microsoft.Agents.AI;
 
-internal static class ExplicitEvaluation
+public static class ExplicitEvaluation
 {
     public static async Task<(string EvalId, string RunId)> RunAsync(
-        AIProjectClient project, AIAgent agent, string judgeModel, string[] queries, string[] evaluators, string mode)
+        AIProjectClient project, IEnumerable<object> inputs, string judgeModel, string[] evaluators, string testName)
     {
-        var inputs = new List<object>();
-        foreach (string query in queries)
-        {
-            AgentResponse response = await agent.RunAsync(query);
-            inputs.Add(new { item = new { query, response = response.Text } });
-        }
         var evalClient = project.GetProjectOpenAIClient().GetEvaluationClient();
         var definition = new
         {
-            name = $"dotnet-validation-{mode}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}",
+            name = $"dotnet-validation-{testName}-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}",
             data_source_config = new
             {
                 type = "custom",

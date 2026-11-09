@@ -1,0 +1,26 @@
+name: .NET Foundry negative quality gates
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: Hosted runner, or an explicitly provisioned temporary synthetic-validation runner
+        type: choice
+        options: [hosted, temporary-validation]
+        default: hosted
+      upload_artifacts:
+        description: Upload raw result artifacts (requires available GitHub Actions storage)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write
+  checks: write
+
+jobs:
+  evaluate:
+    uses: ./.github/workflows/evaluate-project.yml
+    with:
+      filter: Category=Negative
+      runner: ${{ inputs.runner }}
+      upload_artifacts: ${{ inputs.upload_artifacts }}

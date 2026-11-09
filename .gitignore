@@ -1,6 +1,8 @@
 bin/
 obj/
 results/
+test-results/
+TestResults/
 .foundry/
 .azure/
 reference/

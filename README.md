@@ -26,18 +26,33 @@ The judge can use a different model deployment from the agent.
 | `ScienceAgent.cs` | Defines the science agent's instructions and creates the MAF agent. |
 | `Program.cs` | Runs the application with a question supplied on the command line. |
 | `MafAgent.csproj` | The application project at the repository root. |
-| `tests/Program.cs` | Selects the evaluation mode. |
-| `tests/MafEvaluation.cs` | Connects the application agent to the tests and shows the `EvaluateAsync` approach. |
-| `tests/PromptEvaluation.cs` | Loads an existing Foundry prompt agent, or creates the example prompt agent. |
-| `tests/ExplicitEvaluation.cs` | Invokes the agent and submits answers to Foundry with explicit orchestration. |
-| `tests/EvaluationRunner.cs` | Selects the approach, retrieves scores, enforces the quality gate, and writes reports. |
-| `tests/EvalValidation.csproj` | The evaluation project, which references the application project. |
-| `.github/workflows/evaluate.yml` | Runs evaluations and publishes GitHub summaries, test checks, and artifacts. |
+| `tests/AgentEvaluations.Tests.csproj` | One xUnit test project referencing the application. |
+| `tests/MafExplicitTests.cs` | Evaluates the application agent with an explicit question/answer loop and Foundry submission. |
+| `tests/MafHelperTests.cs` | Evaluates the application agent using `agent.EvaluateAsync`. |
+| `tests/PromptAgentTests.cs` | Loads an existing Foundry prompt agent version, invokes it, and submits its answers for evaluation. |
+| `tests/MafExplicitNegativeTests.cs` | Asserts that explicit evaluation rejects an intentionally bad agent. |
+| `tests/MafHelperNegativeTests.cs` | Asserts that helper evaluation rejects an intentionally bad agent. |
+| `tests/EvaluationReportTests.cs` | Offline tests for fail-closed configuration errors and reports. |
+| `tests/Shared/ExplicitEvaluation.cs` | Submits collected answers to Foundry; does not create or invoke agents. |
+| `tests/Shared/EvaluationReport.cs` | Retrieves raw scores, enforces the quality gate, and writes reports; does not select a test or approach. |
+| `tests/Shared/EvaluationSettings.cs` | Reads configuration and creates an authenticated project client. |
+| `tools/CreatePromptAgent/Program.cs` | Creates the optional example prompt agent separately from tests. |
+| `.github/workflows/evaluate.yml` | Runs the three positive xUnit tests. |
+| `.github/workflows/evaluate-negative.yml` | Runs the two negative xUnit tests. |
+| `.github/workflows/evaluate-project.yml` | Shared CI setup, `dotnet test`, and TRX reporting. |
+
+All tests belong to one normal xUnit project. Each live test method owns its
+questions, evaluators, agent construction, evaluation calls, and assertions.
+There is no mode argument or dispatcher. Shared source files handle configuration, submission of
+collected answers, and result validation/reporting, without knowing which test
+or agent implementation is running. Tests run sequentially to avoid competing
+summary writes and concurrent judge load.
 
 To evaluate your own MAF application, reference its project from
-`tests/EvalValidation.csproj` and update the factory call in
-`tests/MafEvaluation.cs`. Your application's agent instructions and tools stay
-in the application; the test project owns the questions and scoring.
+`tests/AgentEvaluations.Tests.csproj`
+and update the agent factory call in `MafExplicitTests.cs` or `MafHelperTests.cs`. Your
+application's instructions and tools stay in the application; each test owns
+its questions and scoring.
 
 ## Run locally
 
@@ -49,7 +64,7 @@ in the application; the test project owns the questions and scoring.
 - Foundry User access on the parent Foundry account for the identity running
   evaluations. See [evaluation permissions](https://learn.microsoft.com/en-us/azure/foundry/observability/how-to/evaluation-permissions).
 
-Both projects use NuGet packages. `dotnet run` restores their dependencies
+All projects use NuGet packages. `dotnet run` and `dotnet test` restore dependencies
 automatically; you only need this repository.
 
 ### Sign in and configure
@@ -65,6 +80,7 @@ az account set --subscription '<subscription ID>'
 $env:FOUNDRY_PROJECT_ENDPOINT = 'https://<resource>.services.ai.azure.com/api/projects/<project>'
 $env:FOUNDRY_MODEL = '<agent model deployment>'
 $env:FOUNDRY_JUDGE_MODEL = '<judge model deployment>'
+$env:EVAL_OUTPUT = Join-Path (Get-Location) 'results'
 ```
 
 `FOUNDRY_JUDGE_MODEL` defaults to `FOUNDRY_MODEL` when omitted. A standard Azure
@@ -75,18 +91,21 @@ CLI sign-in is sufficient for credential acquisition; a custom
 
 ```powershell
 dotnet run --project MafAgent.csproj -- "What is photosynthesis?"
-dotnet run --project tests\EvalValidation.csproj -- maf
+dotnet test tests\AgentEvaluations.Tests.csproj --filter FullyQualifiedName~MafExplicitTests
 ```
 
 The first command prints the agent's answer. The second asks both test questions
 and submits the answers to Foundry for scoring. Results are written to `results/`
-as JSON, Markdown, and JUnit XML. Exit code 0 means the quality gate passed;
-exit code 1 indicates a quality failure or evaluation error.
+as JSON, Markdown, and per-question JUnit XML. xUnit asserts both complete
+scoring and a passing quality gate. `dotnet test` returns nonzero for failed tests.
+Each live test writes its own report prefix (`maf-explicit`, `maf-helper`,
+`prompt-agent`, `maf-explicit-negative`, or `maf-helper-negative`).
+The JSON `Test` field identifies the evaluation.
 
 ### Evaluate the MAF agent with less orchestration
 
 ```powershell
-dotnet run --project tests\EvalValidation.csproj -- maf-simple
+dotnet test tests\AgentEvaluations.Tests.csproj --filter FullyQualifiedName~MafHelperTests
 ```
 
 This test passes the agent, questions, and Foundry evaluators to
@@ -109,26 +128,41 @@ Select an existing agent and version:
 ```powershell
 $env:FOUNDRY_AGENT_NAME = '<agent name>'
 $env:FOUNDRY_AGENT_VERSION = '<agent version>'
-dotnet run --project tests\EvalValidation.csproj -- prompt
+dotnet test tests\AgentEvaluations.Tests.csproj --filter FullyQualifiedName~PromptAgentTests
 ```
 
 Or create the example science prompt agent once:
 
 ```powershell
 $env:FOUNDRY_AGENT_NAME = 'dotnet-eval-smoke'
-dotnet run --project tests\EvalValidation.csproj -- setup
+dotnet run --project tools\CreatePromptAgent\CreatePromptAgent.csproj
 $env:FOUNDRY_AGENT_VERSION = '<version printed by setup>'
-dotnet run --project tests\EvalValidation.csproj -- prompt
+dotnet test tests\AgentEvaluations.Tests.csproj --filter FullyQualifiedName~PromptAgentTests
 ```
 
-To demonstrate a failing quality gate, run `negative` for the explicit approach
-or `maf-simple-negative` for the helper approach. Each substitutes an agent
+To verify rejection by the quality gate, run the negative tests. Each creates an agent
 that answers both questions with "Banana spaceship purple socks."
 
 ```powershell
-dotnet run --project tests\EvalValidation.csproj -- negative
-dotnet run --project tests\EvalValidation.csproj -- maf-simple-negative
+dotnet test tests\AgentEvaluations.Tests.csproj --filter Category=Negative
 ```
+
+These xUnit tests **pass when complete scores reject the bad answers**. Missing
+scores or service errors fail the tests; an infrastructure error is never
+accepted as evidence of rejection. Their per-question evaluation JUnit files
+still describe the rejected answers as failures. Actions publishes the xUnit
+TRX results, so a correctly functioning negative test is green.
+
+Run all tests, only positive live tests, or only offline reporting tests:
+
+```powershell
+dotnet test tests\AgentEvaluations.Tests.csproj
+dotnet test tests\AgentEvaluations.Tests.csproj --filter Category=Positive
+dotnet test tests\AgentEvaluations.Tests.csproj --filter Category=Offline
+```
+
+Only the offline tests run without Azure configuration. Unfiltered execution
+runs all live evaluations as well and requires the prompt-agent name/version.
 
 ### Local evaluation status
 
@@ -146,7 +180,7 @@ scores on another. The exact denied caller identity and root cause remain
 unresolved.
 
 Earlier versions of the explicit evaluation paths produced complete scores
-using GitHub Actions workload identity. The current helper mode also passed
+using GitHub Actions workload identity. The helper approach also passed
 both cases and all four evaluator scores in a private GitHub Actions run.
 This successful run does not establish that the intermittent error is resolved.
 
@@ -170,17 +204,26 @@ Actions > Variables**:
 | `FOUNDRY_PROJECT_ENDPOINT` | Foundry project endpoint |
 | `FOUNDRY_MODEL` | Agent model deployment |
 | `FOUNDRY_JUDGE_MODEL` | Judge model deployment; optional if using the agent model |
-| `FOUNDRY_AGENT_NAME` | Existing prompt agent name; needed for `prompt` mode |
-| `FOUNDRY_AGENT_VERSION` | Existing prompt agent version; needed for `prompt` mode |
+| `FOUNDRY_AGENT_NAME` | Existing prompt agent name; needed only by the `PromptAgent` test |
+| `FOUNDRY_AGENT_VERSION` | Existing prompt agent version; needed only by the `PromptAgent` test |
 
-Open **Actions > .NET Foundry evaluations > Run workflow** and choose `maf`,
-`maf-simple`, `maf-simple-negative`, `prompt`, or `negative`. The default runner is GitHub-hosted. The
+Open **Actions > .NET Foundry evaluations > Run workflow** to run `MafExplicit`,
+`MafHelper`, and `PromptAgent` as separate tests in one test project. A failure
+does not stop the remaining tests. Configure the existing prompt agent before running this
+workflow; the tests do not create or modify it.
+
+The separate **.NET Foundry negative quality gates** workflow runs
+`MafExplicitNegativeTests` and `MafHelperNegativeTests`. These tests assert that
+the quality gate rejects bad answers, so their jobs should be green when the
+gate works correctly and red for incomplete scoring or unexpected acceptance.
+
+The default runner is GitHub-hosted. The
 `temporary-validation` option supports a provisioned Windows x64 self-hosted
 runner labeled `dotnet-eval-validation`.
 
-Each run provides a job summary with scores and a Foundry report link,
-individual case results in the **Foundry quality tests** check, and JSON,
-Markdown, and JUnit artifacts. Set `upload_artifacts` to false to omit
+Each run provides summaries with scores and Foundry report links,
+individual xUnit test results in its **Foundry evaluation tests** check, and JSON,
+Markdown, per-question JUnit, and xUnit TRX artifacts. Set `upload_artifacts` to false to omit
 downloadable files; scoring, quality enforcement, summaries, and test checks
 remain enabled.
 
@@ -195,7 +238,7 @@ the project files, as in a normal .NET application. The Foundry integration
 currently uses preview APIs. GitHub Actions are pinned to commit hashes for
 supply-chain integrity.
 
-Both projects build using NuGet dependencies.
+The application and test projects build using NuGet dependencies.
 Earlier runs verified complete MAF and prompt-agent scores, a failing negative
 quality gate, and GitHub summaries and individual-test checks. Those live runs
 preceded the current root-agent/`tests` layout. The current package-based
@@ -204,6 +247,18 @@ as expected. Its local positive MAF run had three scores and one evaluator
 authentication error. The concise example subsequently produced a passing
 local run as well as an incomplete run, and passed both cases in a private
 GitHub Actions run; reliable execution remains to be established.
+After consolidation into one xUnit project, a full local run against Azure on
+2026-11-09 passed all 10 tests: three positive live evaluations, two negative
+live evaluations, and five offline reporting cases. All 20 live evaluator scores
+were present: positive scores ranged from 4 to 5; both negative agents scored 1
+on all criteria and were correctly rejected. JSON, Markdown, per-question JUnit,
+the combined GitHub summary, and native xUnit TRX results were verified.
+This successful run does not establish that the earlier intermittent service
+error is resolved. The xUnit workflow also ran in a private GitHub Actions
+repository: nine of ten tests passed, including both MAF approaches, both
+negative tests, and all offline reporting cases. The prompt-agent test failed
+closed on an Azure model rate-limit response (HTTP 429); native TRX test
+reporting worked. This is not a fully passing CI run.
 
 ## References
 
