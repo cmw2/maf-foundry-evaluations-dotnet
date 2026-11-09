@@ -112,10 +112,14 @@ dotnet run --project tests\EvalValidation.csproj -- negative
 
 Local agent invocation and direct judge inference succeeded in testing.
 Local evaluations submitted using an interactive Azure CLI user sign-in
-returned incomplete scores with the nested error
+have intermittently returned incomplete scores with the nested error
 `Principal does not have access to API/Operation`. Account-scoped Foundry User
 access, the documented request format, and a separate judge model did not
-resolve it. The exact denied caller identity and root cause remain unresolved.
+reliably resolve it. A temporary project-managed-identity permission test
+produced a fully scored positive run and a fully scored negative run, but
+another evaluation still had the same authentication error after propagation.
+The experimental grant was removed. The exact denied caller identity and
+root cause remain unresolved.
 
 The same evaluation paths produced complete scores using GitHub Actions
 workload identity. This points to an authentication-path difference to
@@ -167,8 +171,10 @@ supply-chain integrity.
 Both projects build using NuGet dependencies.
 Earlier runs verified complete MAF and prompt-agent scores, a failing negative
 quality gate, and GitHub summaries and individual-test checks. Those live runs
-preceded the current root-agent/`tests` layout; end-to-end cloud execution of
-the reorganized version remains to be verified.
+preceded the current root-agent/`tests` layout. The current package-based
+negative test also produced all four scores of 1 and failed the quality gate
+as expected. Its local positive MAF run had three scores and one evaluator
+authentication error; reliable positive execution remains to be established.
 
 ## References
 
